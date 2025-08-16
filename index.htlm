@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>APP PREVISIONE GIANNI</title>
+  <style>
+    :root { --bg:#0f172a; --panel:#111827ee; --text:#e5e7eb; --muted:#9ca3af; }
+    html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font-family:-apple-system,system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
+    .wrap{max-width:860px;margin:0 auto;padding:16px}
+    header{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}
+    h1{font-size:20px;margin:0}
+    .sub{color:var(--muted);font-size:12px}
+    .card{background:var(--panel);border:1px solid #1f2937;border-radius:16px;padding:12px;box-shadow:0 10px 25px rgba(0,0,0,.25);margin-top:12px}
+    .row{display:flex;gap:8px}
+    input,button{width:100%;padding:12px 14px;border-radius:12px;border:1px solid #374151;background:#0b1220;color:var(--text);font-size:16px}
+    button{background:linear-gradient(135deg,#22c55e,#16a34a);border:none;font-weight:600;cursor:pointer}
+    .chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+    .chip{padding:8px 10px;background:#0b1220;border:1px solid #374151;border-radius:999px;font-size:12px;color:#cbd5e1}
+    .chip button{all:unset;cursor:pointer}
+    .kpis{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:8px}
+    .kpi{background:#0b1220;border:1px solid #1f2937;padding:10px;border-radius:12px;text-align:center}
+    .kpi .v{font-size:18px;font-weight:700}
+    .tag{padding:4px 8px;border-radius:999px;font-size:12px;font-weight:700;border:1px solid #374151}
+    .buy{background:#052e1b;color:#86efac;border-color:#14532d}
+    .sell{background:#3b0a0a;color:#fecaca;border-color:#7f1d1d}
+    .hold{background:#1f2937;color:#e5e7eb}
+    .right{text-align:right}
+    .spinner{width:18px;height:18px;border:3px solid #334155;border-top-color:#22c55e;border-radius:50%;animation:spin .9s linear infinite;display:inline-block;vertical-align:middle}
+    @keyframes spin{to{transform:rotate(360deg)}}
+    canvas{width:100%;height:280px}
+    #debug{white-space:pre-wrap;background:#0b1220;border:1px solid #334155;border-radius:12px;padding:10px;font-size:12px;color:#86efac}
+  </style>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1"></script>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div>
+        <h1>APP PREVISIONE GIANNI</h1>
+        <div class="sub">Previsioni rapide (1g • 1s • 1m) + trend & segnali — compatibile iPhone/Netlify</div>
+      </div>
+      <div id="status" class="sub"></div>
+    </header>
+
+    <div class="card">
+      <div class="row">
+        <input id="ticker" placeholder="Ticker (NVDA, MSFT, TSLA, UCG.MI, ENI.MI…)" autocapitalize="characters" />
+        <button id="goBtn">Prevedi</button>
+      </div>
+      <div class="chips">
+        <span class="chip"><button onclick="quick('NVDA')">NVDA</button></span>
+        <span class="chip"><button onclick="quick('MSFT')">MSFT</button></span>
+        <span class="chip"><button onclick="quick('TSLA')">TSLA</button></span>
+        <span class="chip"><button onclick="quick('UCG.MI')">UCG.MI</button></span>
+        <span class="chip"><button onclick="quick('ENI.MI')">ENI.MI</button></span>
+        <span class="chip"><button onclick="quick('ISP.MI')">ISP.MI</button></span>
+      </div>
+      <div class="sub" style="margin-top:6px">Per i titoli di Borsa Italiana usa il suffisso <b>.MI</b>.</div>
+    </div>
+
+    <div id="out" style="display:none">
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap">
+          <div>
+            <div style="font-size:16px;font-weight:700" id="symbolLbl">—</div>
+            <div class="sub" id="dateLbl">—</div>
+          </div>
+          <div class="kpis">
+            <div class="kpi"><div class="sub">Prezzo</div><div class="v" id="priceLbl">—</div></div>
+            <div class="kpi"><div class="sub">Prob. 1s ↑</div><div class="v" id="pWeek">—</div></div>
+            <div class="kpi"><div class="sub">Segnale</div><div class="v" id="signalLbl"><span class="tag hold">HOLD</span></div></div>
+          </div>
+        </div>
+        <canvas id="chart"></canvas>
+      </div>
+
+      <div class="card">
+        <table style="width:100%;border-collapse:collapse">
+          <thead><tr>
+            <th>Orizzonte</th><th class="right">Prob. rialzo</th>
+            <th class="right">Prezzo atteso</th><th class="right">Intervallo 68%</th><th>Segnale</th>
+          </tr></thead>
+          <tbody id="tbody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card"><div id="debug">DEBUG pronto.</div></div>
+  </div>
+
+<script>
+(function(){
+  const $ = s => document.querySelector(s);
+  const fmt = n => n.toLocaleString('it-IT',{maximumFractionDigits:2});
+  const pct = n => (n*100).toLocaleString('it-IT',{maximumFractionDigits:1})+'%';
+  const dateIt = ts => new Date(ts*1000).toLocaleDateString('it-IT');
+  let chart;
+
+  function log(x){ const d=$('#debug'); d.textContent += "\n" + x; }
+
+  // pulsante e invio
+  $('#goBtn').addEventListener('click', run);
+  $('#ticker').addEventListener('keydown', e=>{ if(e.key==='Enter') run(); });
+  window.quick = s => { $('#ticker').value=s; run(); };
+
+  async function run(){
+    const sym = ($('#ticker').value||'').trim().toUpperCase();
+    if(!sym){ return; }
+    setStatus('<span class="spinner"></span> Carico dati…');
+    try{
+      const d = await fetchProxy(sym) || (!sym.includes('.') ? await fetchProxy(sym+'.MI') : null);
+      if(!d) throw new Error('Dati non disponibili per "'+sym+'".');
+      renderAll(d.symbol, d.data);
+      setStatus(''); log('OK '+d.symbol+' ('+d.data.close.length+' barre)');
+    }catch(e){ setStatus('⚠︎ '+(e.message||String(e))); log('ERR '+(e.message||e)); }
+  }
+  function setStatus(x){ $('#status').innerHTML=x; }
+
+  // Proxy no-CORS → Yahoo Finance (ok iPhone/Netlify)
+  async function fetchProxy(symbol){
+    const url = 'https://r.jina.ai/http://query1.finance.yahoo.com/v8/finance/chart/'+encodeURIComponent(symbol)+'?range=6mo&interval=1d&includePrePost=false';
+    try{
+      const t = await (await fetch(url,{cache:'no-store'})).text();
+      const j = JSON.parse(t);
+      const r = j && j.chart && j.chart.result && j.chart.result[0];
+      if(!r) return null;
+      const q = r.indicators && r.indicators.quote && r.indicators.quote[0] || {};
+      return { symbol, data:{ timestamps:r.timestamp, close:q.close } };
+    }catch(e){ log('fetchProxy fail for '+symbol); return null; }
+  }
+
+  // Statistiche
+  function sma(v,p){ const out=new Array(v.length).fill(NaN); let s=0; for(let i=0;i<v.length;i++){ s+=v[i]; if(i>=p) s-=v[i-p]; if(i>=p-1) out[i]=s/p; } return out; }
+  function dailyR(v){ const out=[NaN]; for(let i=1;i<v.length;i++){ out.push(Math.log(v[i]/v[i-1])); } return out; }
+  function avg(a){ let s=0,c=0; for(const x of a){ if(Number.isFinite(x)){ s+=x;c++; } } return c?s/c:0; }
+  function std(a){ const m=avg(a); let v=0,c=0; for(const x of a){ if(Number.isFinite(x)){ v+=(x-m)*(x-m); c++; } } return c>1?Math.sqrt(v/(c-1)):0; }
+  function clamp(x,a,b){ return Math.max(a,Math.min(b,x)); }
+  function zProb(x){ const t=1/(1+0.2316419*Math.abs(x)); const d=0.3989423*Math.exp(-x*x/2); let p=d*t*(0.3193815+t*(-0.3565638+t*(1.781478+t*(-1.821256+t*1.330274)))); if(x>0) p=1-p; return p; }
+  function signalFrom(probUp,expRet,H){ if(probUp>0.62 && (H<=21?expRet>0.01:expRet>0.02)) return 'BUY'; if(probUp<0.38 && expRet<0) return 'SELL'; return 'HOLD'; }
+  function tag(sig){ const cls=sig==='BUY'?'buy':(sig==='SELL'?'sell':'hold'); return '<span class="tag '+cls+'">'+sig+'</span>'; }
+
+  function renderAll(symbol, d){
+    const ts=d.timestamps, close=(d.close||[]).map(Number).filter(v=>v>0);
+    if(!ts || !close.length){ throw new Error('Serie vuota'); }
+    const last=close.length-1, P0=close[last];
+
+    const r = dailyR(close);
+    const n = close.length, look=Math.min(90,n-1);
+    const mu = avg(r.slice(n-look).filter(Number.isFinite));
+    const sd = std(r.slice(n-look).filter(Number.isFinite));
+    const SMA20 = sma(close,20), SMA50=sma(close,50);
+
+    const horizons=[{label:'1 giorno',H:1},{label:'1 settimana',H:5},{label:'1 mese',H:21}];
+    const tb = $('#tbody'); tb.innerHTML='';
+    let weekProb=0, weekSignal='HOLD';
+
+    for(const h of horizons){
+      const H=h.H;
+      let base = zProb(((mu-0.5*sd*sd)*Math.sqrt(H))/(sd||1e-9)); if(!Number.isFinite(base)) base=0.5;
+      const trendAdj = ((SMA20[last]||0) > (SMA50[last]||0) ? 0.06 : -0.06) * Math.min(1,Math.sqrt(5/H));
+      const probUp = clamp(base + trendAdj, 0.05, 0.95);
+
+      const exp = P0*Math.exp(mu*H);
+      const med = P0*Math.exp((mu-0.5*sd*sd)*H);
+      const lo  = med*Math.exp(-sd*Math.sqrt(H));
+      const hi  = med*Math.exp(sd*Math.sqrt(H));
+      const sig = signalFrom(probUp, exp/P0-1, H);
+
+      const tr=document.createElement('tr');
+      tr.innerHTML='<td>'+h.label+'</td><td class="right">'+pct(probUp)+'</td><td class="right">€ '+fmt(exp)+'</td><td class="right">€ '+fmt(lo)+' → € '+fmt(hi)+'</td><td>'+tag(sig)+'</td>';
+      tb.appendChild(tr);
+
+      if(H===5){ weekProb=probUp; weekSignal=sig; }
+    }
+
+    $('#symbolLbl').textContent=symbol;
+    $('#dateLbl').textContent='Ultimo prezzo al '+dateIt(ts[last]);
+    $('#priceLbl').textContent='€ '+fmt(P0);
+    $('#pWeek').textContent=pct(weekProb);
+    $('#signalLbl').innerHTML=tag(weekSignal);
+
+    const labels = ts.map(t=>new Date(t*1000).toLocaleDateString('it-IT'));
+    if(chart) chart.destroy();
+    chart = new Chart(document.getElementById('chart').getContext('2d'), {
+      type:'line',
+      data:{labels,datasets:[
+        {label:'Close',data:close,borderWidth:2,pointRadius:0},
+        {label:'SMA20',data:SMA20,borderWidth:1,pointRadius:0},
+        {label:'SMA50',data:SMA50,borderWidth:1,pointRadius:0},
+      ]},
+      options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{color:'#cbd5e1'}}},
+        scales:{x:{ticks:{color:'#94a3b8'},grid:{color:'#1f2937'}},y:{ticks:{color:'#94a3b8'},grid:{color:'#1f2937'}}}}
+    });
+
+    $('#out').style.display='block';
+  }
+})();
+
+window.onerror = function(msg, src, line, col){
+  document.getElementById('debug').textContent += "\n❌ " + msg + " @" + line + ":" + col;
+};
+</script>
+</body>
+</html>
